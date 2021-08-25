@@ -1,11 +1,10 @@
 
 import json
-from numpy.core.fromnumeric import transpose
 import requests
 import csv
 import os
+import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
 import datetime as dt
 
 ### JSON writer
@@ -57,9 +56,9 @@ def get_data(stock):
     Collects most recent or all data and saves, assures that all data exists
     """
     #Make directory if not present
-    directory = os.path.abspath('~/stockdata/')
+    directory = os.path.abspath('../stockdata/')
     if not os.path.isdir(directory): 
-        os.mkdir(r'stockdata')
+        os.mkdir(directory)
     #If the file exists check if data needs to be appended
     if os.path.isfile(os.path.join(directory,stock+'.csv')): 
         newfile = False
@@ -228,3 +227,54 @@ def format_data_2(data, input_length, input_quantfiers, output_length,offset, ou
 
     return x_data, x_days, y_data, y_days
 
+
+
+class ModDataset:
+    #FIXMEL Use https://mrjbq7.github.io/ta-lib/
+    def __init__(dataset_path):
+        if dataset_path[-4::] =='.csv':
+            self.load_csv(dataset_path)
+        elif dataset_path[-4::] =='.pkl':
+            self.load_pkl(dataset_path)
+
+
+    def load_csv(dataset_path):
+        """Load Individual Dataset"""
+        self.data = pd.read_csv(dataset_path, parse_dates=True, sep=' ', names=['Date', 'open', 'high', 'low', 'close', 'volume'])
+
+    def load_pkl(dataset_path):
+        self.data = pd.read_pickle(dataset_path)
+
+    def save_data(path):
+        self.data.to_pickle(path)
+
+    def append_MACD(period=14):
+        return 0
+
+
+    def append_WilliamsR(period = 14):
+        self.data['wr_{}'.format(period)] = self.get_wr(self.data['high'], self.data['low'],self.data['close'], period)
+        #self.data = self.data.dropna()
+
+    def append_RSI(period= 14):
+        delta = self.data['close'].diff()[1:]
+        up, down = delta.clip(lower=0), delta.clip(upper=0)
+        roll_up1 = up.ewm(span=period).mean()
+        roll_down1 = down.abs().ewm(span=period).mean()
+        RS1 = roll_up1 / roll_down1
+        RSI1 = 100.0 - (100.0 / (1.0 + RS1))
+        roll_up2 = up.rolling(period).mean()
+        roll_down2 = down.abs().rolling(period).mean()
+        RS2 = roll_up2 / roll_down2
+        RSI2 = 100.0 - (100.0 / (1.0 + RS2))
+        self.data =self.data.iloc[::,1::] #Remove first row of data as there is no RSI data
+        self.data['RSI_EMA_{}'.format(period)] = RSI1
+        self.data['RSI_SMA_{}'.format(period)] = RSI2
+
+
+
+    def get_wr(high, low, close, lookback):
+        highh = high.rolling(lookback).max() 
+        lowl = low.rolling(lookback).min()
+        wr = -100 * ((highh - close) / (highh - lowl))
+        return wr

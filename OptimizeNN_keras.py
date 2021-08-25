@@ -76,7 +76,7 @@ def MP_CNN_Bi_Dir_LSTM(hp):
     returns closing price prediction for 7 days into the future
     """
     input1 = Input((50,1))
-    normalized = LayerNormalization(axis=-1)(input1)
+    normalized = BatchNormalization(axis=-1)(input1)
     model_1 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(normalized)
     model_2 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(normalized)
     model_3 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(normalized)
@@ -85,7 +85,7 @@ def MP_CNN_Bi_Dir_LSTM(hp):
     model = Model(inputs=[input1],outputs=model_concat)
     #TODO: Try also using Adadelta optimizer, allthough Adam most likely will perform better
     model.compile(optimizer=Adadelta(learning_rate=hp.Choice('learning rate',values=[0.15,0.1,1e-2]),rho=hp.Float('rho',0.05,0.35,step=0.05), epsilon=hp.Choice('epsilon',values=[1e-3,1e-4,1e-5])),
-                            loss=MeanSquaredError(),
+                            loss=SymmetricMeanAbsolutePercentageError(),
                             metrics=['MAPE'])
     return model
 
@@ -112,6 +112,33 @@ def MP_CNN_Bi_Dir_LSTM_submodel(hp):
 
 
 
+
+def MultiLayerPerceptron():
+    """Model to make final Buy Hold and Sell decisions
+    Uses Technical Indicators (See if i can predict those with the other networks)
+    https://arxiv.org/pdf/1712.09592.pdf
+    """
+    model = Sequential(
+                    [
+                        Dense(4, activation='relu'),
+                        Dense(5, activation='relu'),
+                        Dense(4, activation='relu'),
+                        Dense(3, activation='softmax')
+                    ]
+                       )
+
+    model.compile(optimizer=Adam(learning_rate=hp.Choice('learning rate',values=[0.15,0.1,1e-2]),rho=hp.Float('rho',0.05,0.35,step=0.05), epsilon=hp.Choice('epsilon',values=[1e-3,1e-4,1e-5])),
+                            loss=SymmetricMeanAbsolutePercentageError(),
+                            metrics=['MAPE'])
+
+
+
+
+
+
+
+
+
 """
 Get fixed Hyperparameters 
 
@@ -124,14 +151,6 @@ def fix_hyperparams(params):
     return hp
         
 
-
-
-"""
-Evolutionary model for buy and sell
------------------
-Input data:
-
-"""
 
 
 
