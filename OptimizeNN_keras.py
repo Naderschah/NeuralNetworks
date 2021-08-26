@@ -8,7 +8,7 @@ import tensorflow.keras.backend as backend
 from keras_tuner import HyperParameters
 
 
-
+#TODO: Use TA-Lib to identify movement pattern and apply associated networks 
 
 def CNN_Conv1D_LSTM(hp):
     '''After hyperparameter optimization and seperate training using parameters and EarlyStopping results in 3-5% MAPE and 3-5% std'''
@@ -113,23 +113,26 @@ def MP_CNN_Bi_Dir_LSTM_submodel(hp):
 
 
 
-def MultiLayerPerceptron():
+def MultiLayerPerceptron(hp):
     """Model to make final Buy Hold and Sell decisions
     Uses Technical Indicators (See if i can predict those with the other networks)
     https://arxiv.org/pdf/1712.09592.pdf
     """
     model = Sequential(
                     [
-                        Dense(4, activation='relu'),
-                        Dense(5, activation='relu'),
-                        Dense(4, activation='relu'),
+                        Dense(hp.Int('Dense1',min_value=2,max_value=12, step=2), activation='sigmoid'),
+                        Dense(hp.Int('Dense2',min_value=5,max_value=21, step=2), activation='sigmoid'),
+                        Dense(hp.Int('Dense3',min_value=2,max_value=12, step=2), activation='sigmoid'),
+                        Dropout(0.2),
                         Dense(3, activation='softmax')
                     ]
                        )
 
-    model.compile(optimizer=Adam(learning_rate=hp.Choice('learning rate',values=[0.15,0.1,1e-2]),rho=hp.Float('rho',0.05,0.35,step=0.05), epsilon=hp.Choice('epsilon',values=[1e-3,1e-4,1e-5])),
-                            loss=SymmetricMeanAbsolutePercentageError(),
-                            metrics=['MAPE'])
+    model.compile(optimizer=Adam(learning_rate=hp.Choice('learning rate',values=[0.15,0.1,1e-2]), epsilon=hp.Choice('epsilon',values=[1e-3,1e-4,1e-5])),
+                            loss='categorical_crossentropy',
+                            metrics=['accuracy'])
+    
+    return model
 
 
 
