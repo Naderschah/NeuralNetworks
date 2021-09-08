@@ -15,6 +15,7 @@ from sklearn.model_selection import train_test_split
 from tensorflow.python.keras.utils.generic_utils import to_snake_case
 from scipy.sparse import coo_matrix
 from itertools import compress
+import time
 
 def write_json(new_data, filename='data.json'):
     with open(filename,'r+') as file:
@@ -38,7 +39,7 @@ def AV_data(stock,full=True):
     stock -> str: stock ticker
     full -> bool: wheter or not to return complete dataset
     """
-    f =  open(os.path.abspath('~/keys'),'r')
+    f =  open(os.path.join('/home/felix/keys'),'r')
     content = f.readlines()
     f.close()
     for i in range(len(content)):
@@ -49,10 +50,28 @@ def AV_data(stock,full=True):
         outputsize = 'full'
     else:
         outputsize = 'compact'
-    url = 'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={}&outputsize={}&apikey={}&datatype=csv'.format(stock,outputsize, API_KEY)
-    res= requests.get(url)
-    decoded_content = res.content.decode('utf-8')
-    return list(csv.reader(decoded_content.splitlines(), delimiter=','))[1::][::-1] #Flip list so time series is sequentially forward
+    while True:
+        url = 'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={}&outputsize={}&apikey={}&datatype=csv'.format(stock,outputsize, API_KEY)
+        res= requests.get(url)
+        decoded_content = res.content.decode('utf-8')
+        data= list(csv.reader(decoded_content.splitlines(), delimiter=','))[1::][::-1] #Flip list so time series is sequentially forward
+        if 'Alpha Vantage' in data[1][0]: #Should contain the message of API key overuse
+            time.sleep(15) #Wait 15 seconds
+        else:
+            break
+    return data
+
+import yfinance as yf
+def yfinance(stock):
+    stock = yf.Ticker(stock)
+    data = stock.history(period='max',interval='1d') #I need date open high low close volume
+    data.drop(columns=["Dividends", "Stock Splits"], inplace=True)
+    print(type(data.iloc[0,0]))
+    data.insert(loc=0,column='date',value=data.index.map(lambda x: x))
+    return data.to_records(index=True)#.tolist()
+
+if __name__=='__main__':
+    print(yfinance('AAPL'))
 
 #Saving Data if not already saved
 
@@ -72,7 +91,10 @@ def get_data(stock):
         with open(os.path.join(directory,stock+'.csv'),'r', newline='') as csvfile:
             spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|') # Get csv file reader
             spamreader =list(spamreader)
-            final = spamreader[-1][0]
+            try:
+                final = spamreader[-1][0] 
+            except: #Index errer
+                final = None
             if final != dt.date.today().strftime('%Y-%m-%d'):
                 try: 
                     dat = AV_data(stock,full=newfile)
@@ -88,15 +110,17 @@ def get_data(stock):
     else:
         newfile=True
         i = -1 #Write full data set
-        try: 
+        try:
             dat = AV_data(stock,full=newfile)
-        except: 
-            print('Could not retrieve data, using previously saved data') 
-    with open(os.path.join(directory,stock+'.csv'),'a', newline='') as csvfile:
-        spamwriter = csv.writer(csvfile, delimiter=' ',
-                        quotechar='|', quoting=csv.QUOTE_MINIMAL) #Get Writer for csv file
-        for j in range(i+1,len(dat)): #Write the data to file
-            spamwriter.writerow(dat[j])
+            with open(os.path.join(directory,stock+'.csv'),'a', newline='') as csvfile:
+                spamwriter = csv.writer(csvfile, delimiter=' ',
+                                quotechar='|', quoting=csv.QUOTE_MINIMAL) #Get Writer for csv file
+                for j in range(i+1,len(dat)): #Write the data to file
+                    spamwriter.writerow(dat[j])
+        except Exception as e: 
+            print('Could not retrieve data ', e)
+            return 0 
+
     with open(os.path.join(directory,stock+'.csv'),'r', newline='') as csvfile:
         spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
         return np.array(list(spamreader),dtype=object)
@@ -235,6 +259,23 @@ def format_data_2(data, input_length, input_quantfiers, output_length,offset, ou
     return x_data, x_days, y_data, y_days
 
 
+def prep_all_data(directory,save_files):
+    """Pass all downloaded stock data to ModDataset and prep MLP"""
+    for dirpath, dirnames, filenames in os.walk(directory):
+        for i in filenames:
+            filepath = os.path.join(dirpath,i)
+            dataset = ModDataset(filepath)
+            dataset.data
+            dataset.prep_MultiLayerPerceptron(offset=0)
+            dataset.save_data(os.path.join(save_files,i[:-4:]))
+
+
+def append_csv(data,filename):
+    """Append to a .pkl file"""
+    import numpy as np        
+    f=open(filename+'.csv','ab')
+    np.savetxt(f,data, delimiter=',', fmt='%d')
+    f.close()
 
 
 class ModDataset:
@@ -355,11 +396,19 @@ class ModDataset:
         "CDLDOJI_Bear": 104
     }
     
-    def __init__(self,dataset_path):
+    def __init__(self,dataset_path, preped=False):
         if dataset_path[-4::] =='.csv':
             self.load_csv(dataset_path)
         elif dataset_path[-4::] =='.pkl':
             self.load_pkl(dataset_path)
+        elif preped:
+            for dirpath, dirnames, filenames in os.walk(dataset_path):
+                for i in filenames:
+                    if hasattr(self,'data'):
+                        self.data=self.data.append(pd.read_pickle(os.path.join(dirpath,i)))
+                    else:
+                        self.data=self.data = pd.read_pickle(os.path.join(dirpath,i))
+
 
 
     def load_csv(self,dataset_path):
@@ -368,6 +417,7 @@ class ModDataset:
 
     def load_pkl(self,dataset_path):
         self.data = pd.read_pickle(dataset_path)
+
         
     def prep_MultiLayerPerceptron(self,offset=0):
         self.append_MACD()
@@ -375,6 +425,7 @@ class ModDataset:
         self.append_WilliamsR()
         self.compute_patterns()
         self.data = self.recognize_candlesticks(self.data)
+        self.change_to_candlestick()
         self.data = self.data[offset:]
         self.get_optimized_labels(offset=0)
         
@@ -463,6 +514,24 @@ class ModDataset:
         df.drop(cols_to_drop, axis = 1, inplace = True)
 
         return df
+    
+    def change_to_candlestick(self):
+        """Change candlestick row to index"""
+        candle_names = ta.get_function_groups()['Pattern Recognition']
+
+        # patterns not found in the patternsite.com
+        exclude_items = ('CDLCOUNTERATTACK',
+                        'CDLLONGLINE',
+                        'CDLSHORTLINE',
+                        'CDLSTALLEDPATTERN',
+                        'CDLKICKINGBYLENGTH')
+
+        candle_names = [[candle+'_Bear', candle+'_Bull'] for candle in candle_names if candle not in exclude_items]
+        candle_names = [cell for row in candle_names for cell in row]
+        candle_names = {candle:index+1 for index,candle in enumerate(candle_names)}
+        candle_names['NO_PATTERN'] = 0
+        self.data['candlestick_pattern'] = self.data['candlestick_pattern'].map(candle_names)
+
 
     def prep_for_nn(self):
         """Change candlestick names to integers for training"""
@@ -485,26 +554,23 @@ class ModDataset:
         b = [1,0,0]
         h = [0,1,0]
         s = [0,0,1]
-        
         data = self.data.dropna().iloc[::,6:].to_numpy(dtype='float')
         #Change to last 1/5 is val rest train
         train, test = train_test_split(data,test_size=split, random_state=random_state)
+        del data
         x_train = train[::,:-3:] #from index 6 as Date	open	high	low	close	volume comes first
         y_train = train[::,-3::].astype('int')
         x_test = test[::,:-3:] 
         y_test = test[::,-3::].astype('int')
-
+        del train, test
         y_train_onehot = [np.sum(i*[0,1,2]) for i in y_train]
-                                #FIXME: Indeces are currently name and match fix prep for nn first
-        x_train, y_train = SMOTENC(categorical_features=[-1]).fit_resample(x_train, y_train_onehot)
-        
+        x_train, y_train = SMOTENC(categorical_features=[self.data.dtypes==object]).fit_resample(x_train, y_train_onehot)
         y_train = np.array([b if i==0 else h if i==1 else s if i==2 else 0 for i in y_train])
 
         y_test_onehot = [np.sum(i*[0,1,2]) for i in y_test]
-
-        x_test, y_test = SMOTENC(categorical_features=[-1]).fit_resample(x_test, y_test_onehot)
-        
+        x_test, y_test = SMOTENC(categorical_features=[self.data.dtypes==object]).fit_resample(x_test, y_test_onehot)
         y_test = np.array([b if i==0 else h if i==1 else s for i in y_test])
+        del y_test_onehot, y_train_onehot,
         print('After Overfitting')
         print('Test Data Buy: {}, Hold:{}, Sell: {}'.format(*np.sum(y_test,axis=0)))
         print('Train Data Buy: {}, Hold:{}, Sell: {}'.format(*np.sum(y_train,axis=0)))
