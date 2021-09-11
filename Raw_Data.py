@@ -16,6 +16,7 @@ from tensorflow.python.keras.utils.generic_utils import to_snake_case
 from scipy.sparse import coo_matrix
 from itertools import compress
 import time
+import yfinance as yf
 
 def write_json(new_data, filename='data.json'):
     with open(filename,'r+') as file:
@@ -30,7 +31,7 @@ def write_json(new_data, filename='data.json'):
 
 
 
-### Importing data from AlphaVantage
+### Importing data
 
 def AV_data(stock,full=True):
     """
@@ -51,7 +52,7 @@ def AV_data(stock,full=True):
     else:
         outputsize = 'compact'
     while True:
-        url = 'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={}&outputsize={}&apikey={}&datatype=csv'.format(stock,outputsize, API_KEY)
+        url = 'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={}&outputsize={}&apikey={}&datatype=csv'.format(stock,outputsize, API_KEY)
         res= requests.get(url)
         decoded_content = res.content.decode('utf-8')
         data= list(csv.reader(decoded_content.splitlines(), delimiter=','))[1::][::-1] #Flip list so time series is sequentially forward
@@ -61,8 +62,8 @@ def AV_data(stock,full=True):
             break
     return data
 
-import yfinance as yf
-def yfinance(stock):
+
+def yf_data(stock):
     stock = yf.Ticker(stock)
     data = stock.history(period='max',interval='1d') #I need date open high low close volume
     data.drop(columns=["Dividends", "Stock Splits"], inplace=True)
@@ -70,12 +71,10 @@ def yfinance(stock):
     data.insert(loc=0,column='date',value=data.index.map(lambda x: x))
     return data.to_records(index=True)#.tolist()
 
-if __name__=='__main__':
-    print(yfinance('AAPL'))
 
-#Saving Data if not already saved
+#Retrieve and save data
 
-def get_data(stock): 
+def get_data_AV(stock): 
     """
     Use as primary data retrieval!
     ----------------
@@ -86,9 +85,9 @@ def get_data(stock):
     if not os.path.isdir(directory): 
         os.mkdir(directory)
     #If the file exists check if data needs to be appended
-    if os.path.isfile(os.path.join(directory,stock+'.csv')): 
+    if os.path.isfile(os.path.join(directory,'AV_'+stock+'.csv')): 
         newfile = False
-        with open(os.path.join(directory,stock+'.csv'),'r', newline='') as csvfile:
+        with open(os.path.join(directory,'AV_'+stock+'.csv'),'r', newline='') as csvfile:
             spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|') # Get csv file reader
             spamreader =list(spamreader)
             try:
@@ -112,7 +111,7 @@ def get_data(stock):
         i = -1 #Write full data set
         try:
             dat = AV_data(stock,full=newfile)
-            with open(os.path.join(directory,stock+'.csv'),'a', newline='') as csvfile:
+            with open(os.path.join(directory,'AV_'+stock+'.csv'),'a', newline='') as csvfile:
                 spamwriter = csv.writer(csvfile, delimiter=' ',
                                 quotechar='|', quoting=csv.QUOTE_MINIMAL) #Get Writer for csv file
                 for j in range(i+1,len(dat)): #Write the data to file
@@ -121,7 +120,57 @@ def get_data(stock):
             print('Could not retrieve data ', e)
             return 0 
 
-    with open(os.path.join(directory,stock+'.csv'),'r', newline='') as csvfile:
+    with open(os.path.join(directory,'AV_'+stock+'.csv'),'r', newline='') as csvfile:
+        spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
+        return np.array(list(spamreader),dtype=object)
+    
+def get_data_yf(stock): 
+    """
+    Use as primary data retrieval!
+    ----------------
+    Collects most recent or all data and saves, assures that all data exists
+    """
+    #Make directory if not present
+    directory = os.path.abspath('../stockdata/')
+    if not os.path.isdir(directory): 
+        os.mkdir(directory)
+    #If the file exists check if data needs to be appended
+    if os.path.isfile(os.path.join(directory,'yf_'+stock+'.csv')): 
+        newfile = False
+        with open(os.path.join(directory,'yf_'+stock+'.csv'),'r', newline='') as csvfile:
+            spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|') # Get csv file reader
+            spamreader =list(spamreader)
+            try:
+                final = spamreader[-1][0] 
+            except: #Index errer
+                final = None
+            if final != dt.date.today().strftime('%Y-%m-%d'):
+                try: 
+                    dat = yf_data(stock)
+                except: 
+                    print('Could not retrieve data, using previously saved data') 
+                    return np.array(spamreader) #TODO: Check this works!
+            
+                for i in range(len(dat)):
+                    if dat[i][0] == final: #Get last index of date written to file
+                        break
+            else:
+                return np.array(spamreader)
+    else:
+        newfile=True
+        i = -1 #Write full data set
+        try:
+            dat = yf_data(stock)
+            with open(os.path.join(directory,'yf_'+stock+'.csv'),'a', newline='') as csvfile:
+                spamwriter = csv.writer(csvfile, delimiter=' ',
+                                quotechar='|', quoting=csv.QUOTE_MINIMAL) #Get Writer for csv file
+                for j in range(i+1,len(dat)): #Write the data to file
+                    spamwriter.writerow(dat[j])
+        except Exception as e: 
+            print('Could not retrieve data ', e)
+            return 0 
+
+    with open(os.path.join(directory,'yf_'+stock+'.csv'),'r', newline='') as csvfile:
         spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
         return np.array(list(spamreader),dtype=object)
     
@@ -535,6 +584,7 @@ class ModDataset:
 
     def prep_for_nn(self):
         """Change candlestick names to integers for training"""
+        raise Exception('To be implemented')
     
     def get_data_MLP(self):
         keys =[]

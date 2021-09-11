@@ -16,11 +16,6 @@ from tensorflow.keras.optimizers import Adam
 
 
 
-import plaidml.keras
-import os
-plaidml.keras.install_backend()
-os.environ['KERAS_BACKEND'] = 'plaidml.keras.backend'
-
 with open('hyperparameter_best/params','r+') as file:
     file_data = json.load(file)
 
