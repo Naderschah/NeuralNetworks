@@ -8,7 +8,6 @@ import tensorflow.keras.backend as backend
 from keras_tuner import HyperParameters
 
 
-#TODO: Use TA-Lib to identify movement pattern and apply associated networks 
 
 def CNN_Conv1D_LSTM(hp):
     '''After hyperparameter optimization and seperate training using parameters and EarlyStopping results in 3-5% MAPE and 3-5% std'''

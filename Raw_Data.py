@@ -11,6 +11,7 @@ import talib as ta
 from scipy.signal import find_peaks
 from scipy.optimize import minimize
 from imblearn.over_sampling import SMOTENC
+from imblearn.under_sampling import RandomUnderSampler
 from sklearn.model_selection import train_test_split
 from tensorflow.python.keras.utils.generic_utils import to_snake_case
 from scipy.sparse import coo_matrix
@@ -99,7 +100,7 @@ def get_data_AV(stock):
                     dat = AV_data(stock,full=newfile)
                 except: 
                     print('Could not retrieve data, using previously saved data') 
-                    return np.array(spamreader) #TODO: Check this works!
+                    return np.array(spamreader) 
             
                 for i in range(len(dat)):
                     if dat[i][0] == final: #Get last index of date written to file
@@ -194,7 +195,7 @@ def format_data(data, input_length, input_quantfiers, output_length,offset, outp
     """
     #Set dtype to correctly format array for further use
     data = np.array([data.transpose()[0].astype('U10'), *data.transpose()[1::].astype('float64')],dtype=object).transpose()
-    quantifier_keys = {'open':1, 'high':2, 'low':3, 'close':4, 'volume':5} #FIXME: Add keys with correct indices
+    quantifier_keys = {'open':1, 'high':2, 'low':3, 'close':4, 'volume':5} 
     if 'offset' not in locals():
         offset = 0
     input_indeces = [0]
@@ -258,7 +259,7 @@ def format_data(data, input_length, input_quantfiers, output_length,offset, outp
 
 def format_data_2(data, input_length, input_quantfiers, output_length,offset, output_quantifiers, sliding_window = False):
     data = np.array([data.transpose()[0].astype('U10'), *data.transpose()[1::].astype('float64')],dtype=object).transpose()
-    quantifier_keys = {'open':1, 'high':2, 'low':3, 'close':4, 'volume':5} #FIXME: Add keys with correct indices
+    quantifier_keys = {'open':1, 'high':2, 'low':3, 'close':4, 'volume':5} 
     if 'offset' not in locals():
         offset = 0
     indeces = {}
@@ -312,11 +313,13 @@ def prep_all_data(directory,save_files):
     """Pass all downloaded stock data to ModDataset and prep MLP"""
     for dirpath, dirnames, filenames in os.walk(directory):
         for i in filenames:
-            filepath = os.path.join(dirpath,i)
-            dataset = ModDataset(filepath)
-            dataset.data
-            dataset.prep_MultiLayerPerceptron(offset=0)
-            dataset.save_data(os.path.join(save_files,i[:-4:]))
+            if not os.path.isfile(os.path.join(save_files,i)): #In case some files already exist
+                print(i)
+                filepath = os.path.join(dirpath,i)
+                dataset = ModDataset(filepath)
+                dataset.data
+                dataset.prep_MultiLayerPerceptron(offset=0)
+                dataset.save_data(os.path.join(save_files,i[:-4:]))
 
 
 def append_csv(data,filename):
@@ -325,6 +328,31 @@ def append_csv(data,filename):
     f=open(filename+'.csv','ab')
     np.savetxt(f,data, delimiter=',', fmt='%d')
     f.close()
+
+def normalize(array, constants=None): #FIXME: what about the categorical will normalizing change performance? We do normalization due to round off errors 
+    """Normalizes array to 0,1 range for each feature column
+    returns normalized array and coefficients, these will be needed to pass new data!"""
+    if type(array) == list:
+        array = np.array(array)
+    print(array.shape)
+    array = array.transpose()
+    print(array.shape)
+    if constants == None:
+        print('Creating normalization')
+        norm = []
+        for i in range(len(array)):
+            max_val = np.max(array[i])
+            min_val = np.min(array[i])
+            array[i] = (array[i]-min_val)/(max_val-min_val)
+            norm.append((min_val,max_val))
+        return (array.transpose(), norm)
+    else:
+        print('Using old normalization')
+        for i in range(len(array)):
+            array[i] = (array[i]-constants[i][0])/(constants[i][1]-constants[i][0])
+        return array.transpose()
+
+
 
 
 class ModDataset:
@@ -445,7 +473,7 @@ class ModDataset:
         "CDLDOJI_Bear": 104
     }
     
-    def __init__(self,dataset_path, preped=False):
+    def __init__(self,dataset_path, preped=False,print_len=True):
         if dataset_path[-4::] =='.csv':
             self.load_csv(dataset_path)
         elif dataset_path[-4::] =='.pkl':
@@ -455,8 +483,10 @@ class ModDataset:
                 for i in filenames:
                     if hasattr(self,'data'):
                         self.data=self.data.append(pd.read_pickle(os.path.join(dirpath,i)))
+                        if print_len: print(len(self.data))
                     else:
-                        self.data=self.data = pd.read_pickle(os.path.join(dirpath,i))
+                        self.data=pd.read_pickle(os.path.join(dirpath,i))
+                        if print_len: print(len(self.data))
 
 
 
@@ -465,7 +495,10 @@ class ModDataset:
         self.data = pd.read_csv(dataset_path, parse_dates=True, sep=' ', names=['Date', 'open', 'high', 'low', 'close', 'volume'])
 
     def load_pkl(self,dataset_path):
-        self.data = pd.read_pickle(dataset_path)
+        try:
+            self.data = pd.read_pickle(dataset_path)
+        except:
+            self.data = pd.read_pickle(dataset_path[:-4:])
 
         
     def prep_MultiLayerPerceptron(self,offset=0):
@@ -606,32 +639,60 @@ class ModDataset:
         s = [0,0,1]
         data = self.data.dropna().iloc[::,6:].to_numpy(dtype='float')
         #Change to last 1/5 is val rest train
-        train, test = train_test_split(data,test_size=split, random_state=random_state)
-        del data
-        x_train = train[::,:-3:] #from index 6 as Date	open	high	low	close	volume comes first
-        y_train = train[::,-3::].astype('int')
-        x_test = test[::,:-3:] 
-        y_test = test[::,-3::].astype('int')
-        del train, test
-        y_train_onehot = [np.sum(i*[0,1,2]) for i in y_train]
-        x_train, y_train = SMOTENC(categorical_features=[self.data.dtypes==object]).fit_resample(x_train, y_train_onehot)
-        y_train = np.array([b if i==0 else h if i==1 else s if i==2 else 0 for i in y_train])
+        x_data = data[::,:-3:] #from index 6 as Date	open	high	low	close	volume comes first
+        y_data = [np.sum(i*[0,1,2]) for i in data[::,-3::].astype('int')]
+        #All y will be one hot vectors
+        x_train, x_test, y_train, y_test = train_test_split(x_data, y_data,test_size=split, random_state=random_state,stratify=y_data)
+        print('Created train test split')
+        del data, x_data, y_data
 
-        y_test_onehot = [np.sum(i*[0,1,2]) for i in y_test]
-        x_test, y_test = SMOTENC(categorical_features=[self.data.dtypes==object]).fit_resample(x_test, y_test_onehot)
+        x_train, y_train = SMOTENC(categorical_features=[self.data.dtypes==object]).fit_resample(x_train, y_train) #TODO: RAM issue: Split into two seperate operations, one that fits, and one that resamples parts of the data, 
+        y_train = np.array([b if i==0 else h if i==1 else s if i==2 else 0 for i in y_train])
+        print('Oversampled training data')
+
+        x_test, y_test = SMOTENC(categorical_features=[self.data.dtypes==object]).fit_resample(x_test, y_test)
         y_test = np.array([b if i==0 else h if i==1 else s for i in y_test])
-        del y_test_onehot, y_train_onehot,
+        print('Oversampled test data')
+        
         print('After Overfitting')
         print('Test Data Buy: {}, Hold:{}, Sell: {}'.format(*np.sum(y_test,axis=0)))
         print('Train Data Buy: {}, Hold:{}, Sell: {}'.format(*np.sum(y_train,axis=0)))
 
         return x_train, x_test, y_train, y_test
 
+    def undersample(self,split=0.2, random_state=42):
+        """Randomly undersmaple majority classes
+        To avoid random imbalance between test and validation set we split prior"""
+        b = [1,0,0]
+        h = [0,1,0]
+        s = [0,0,1]
+        data = self.data.dropna().iloc[::,6:].to_numpy(dtype='float')
+        #Change to last 1/5 is val rest train
+        x_data = data[::,:-3:] #from index 6 as Date	open	high	low	close	volume comes first
+        y_data = [np.sum(i*[0,1,2]) for i in data[::,-3::].astype('int')]
+        #All y will be one hot vectors
+        x_train, x_test, y_train, y_test = train_test_split(x_data, y_data,test_size=split, random_state=random_state,stratify=y_data)
+        print('Created train test split')
+        del data, x_data, y_data
+        
+        x_train, y_train = RandomUnderSampler(random_state=random_state).fit_resample(x_train, y_train)
+        y_train = np.array([b if i==0 else h if i==1 else s if i==2 else 0 for i in y_train])
+        print('Undersampled training data')
+
+        x_test, y_test = RandomUnderSampler(random_state=random_state).fit_resample(x_test, y_test)
+        y_test = np.array([b if i==0 else h if i==1 else s for i in y_test])
+        print('Undersampled test data')
+        
+        print('After Undersampling')
+        print('Test Data Buy: {}, Hold:{}, Sell: {}'.format(*np.sum(y_test,axis=0)))
+        print('Train Data Buy: {}, Hold:{}, Sell: {}'.format(*np.sum(y_train,axis=0)))
+
+        return x_train, x_test, y_train, y_test
 
     def save_data(self,path,rem_NAN = True):
         if rem_NAN:
             self.data = self.data.dropna()
-        self.data.to_pickle(path)
+        self.data.to_pickle(path+'.pkl')
 
     def append_MACD(self,fastperiod=12, slowperiod=26, signalperiod=9):
         macd, macdsignal, macdhist = ta.MACD(self.data['close'].to_numpy(), fastperiod=fastperiod, slowperiod=slowperiod, signalperiod=signalperiod)
@@ -734,4 +795,7 @@ class ModDataset:
                     delta -= data[i]
                 elif labels[i] == 1:
                     delta += data[i]
-            return delta
+            if delta != 0:
+                return delta
+            else:
+                return 0.01 #Avoids error, not very scientific but good enough

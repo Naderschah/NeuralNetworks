@@ -4,6 +4,15 @@ A repository containing a collection of NeuralNetworks implemented for StockPric
 
 The final goal is developing an automated trading API using these networks
 
+
+
+Developed Models:
+
+MultiLayerPerceptron: Using non normalized input data from the SP500 stocks a maximum accuracy of ~67 % was achieved, however since this is correct identification Buy Hold and Sell signals it is not very representative. A more in depth analysis is found under model_analysis
+
+
+
+
 Content:
 - Analysis_Hyperparameter.py
     - To be implemented, suppose to run Hyperparameter optimization and save the best model for stock x if it does not exist yet
