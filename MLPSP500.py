@@ -22,6 +22,13 @@ from Raw_Data import normalize
 import os
 
 
+
+
+
+
+
+
+
 '''
 #All can be reloaded using tuner.reload with the same parameters
 
@@ -81,12 +88,12 @@ print('Validation data points: ', len(x_test_under),len(y_test_under))
 
 #Normalize data
 print('Normalizing data')
-(x_train_under, constants) = normalize(x_train_under)
-x_test_under = normalize(x_test_under, constants)
-print('Normalization constants: ', constants)
+#(x_train_under, constants) = normalize(x_train_under)
+#x_test_under = normalize(x_test_under, constants)
+#print('Normalization constants: ', constants)
 #Save normalization values
-np.savetxt(os.path.join('/home/felix/NeuralNetworks/MLP_SP_under','MLP_SP_normalized_data_normalization_constants'), constants, delimiter=',')
+#np.savetxt(os.path.join('/home/felix/NeuralNetworks/MLP_SP_under','MLP_SP_normalized_data_normalization_constants'), constants, delimiter=',')
 #Start the search
-print('Saved constants, starting search')
+print('Starting search')
 tuner.search(x_train_under,y_train_under,validation_data=(x_test_under,y_test_under),shuffle=True,batch_size=128)#
 print('undersampling: ',tuner.get_best_hyperparameters()[0])

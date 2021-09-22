@@ -7,7 +7,8 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 from scipy.signal.filter_design import cheb1ap
-import talib as ta
+import talib.abstract as ta
+import talib
 from scipy.signal import find_peaks
 from scipy.optimize import minimize
 from imblearn.over_sampling import SMOTENC
@@ -18,6 +19,7 @@ from scipy.sparse import coo_matrix
 from itertools import compress
 import time
 import yfinance as yf
+import sys
 
 def write_json(new_data, filename='data.json'):
     with open(filename,'r+') as file:
@@ -510,6 +512,23 @@ class ModDataset:
         self.change_to_candlestick()
         self.data = self.data[offset:]
         self.get_optimized_labels(offset=0)
+
+    def prep_feature_selection(self,offset=0):
+        self.append_all()
+        self.get_optimized_labels(offset=offset)
+
+    def prep_select_features(self,features,offset=0,savedir=None):
+        """ function to be run after feature selection using InputTrials, will prepare data for training with newly determined features
+        features - list of talib function features to be appended"""
+        self.append_all(spec=features)
+        self.get_optimized_labels(offset=offset)
+        self.data = self.data[offset:]
+        self.get_optimized_labels(offset=0)
+        self.data = self.recognize_candlesticks(self.data)
+        self.change_to_candlestick()
+        if savedir != None:
+            self.data=self.data.dropna()
+            append_csv(self.data.iloc[::,6::].to_numpy(dtype=float),filename=savedir)
         
 
     def compute_patterns(self):
@@ -519,7 +538,7 @@ class ModDataset:
                         'CDLSHORTLINE',
                         'CDLSTALLEDPATTERN',
                         'CDLKICKINGBYLENGTH')
-        candle_names = ta.get_function_groups()['Pattern Recognition']
+        candle_names = talib.get_function_groups()['Pattern Recognition']
         for candle in candle_names:
             if candle not in exclude_items:
                 self.data[candle] = getattr(ta, candle)(self.data['open'].to_numpy(),self.data['high'].to_numpy(),self.data['low'].to_numpy(),self.data['close'].to_numpy())
@@ -537,7 +556,7 @@ class ModDataset:
         lo = df['low'].astype(float)
         cl = df['close'].astype(float)
 
-        candle_names = ta.get_function_groups()['Pattern Recognition']
+        candle_names = talib.get_function_groups()['Pattern Recognition']
 
         # patterns not found in the patternsite.com
         exclude_items = ('CDLCOUNTERATTACK',
@@ -599,7 +618,7 @@ class ModDataset:
     
     def change_to_candlestick(self):
         """Change candlestick row to index"""
-        candle_names = ta.get_function_groups()['Pattern Recognition']
+        candle_names = talib.get_function_groups()['Pattern Recognition']
 
         # patterns not found in the patternsite.com
         exclude_items = ('CDLCOUNTERATTACK',
@@ -613,11 +632,6 @@ class ModDataset:
         candle_names = {candle:index+1 for index,candle in enumerate(candle_names)}
         candle_names['NO_PATTERN'] = 0
         self.data['candlestick_pattern'] = self.data['candlestick_pattern'].map(candle_names)
-
-
-    def prep_for_nn(self):
-        """Change candlestick names to integers for training"""
-        raise Exception('To be implemented')
     
     def get_data_MLP(self):
         keys =[]
@@ -630,6 +644,46 @@ class ModDataset:
     def get_labels(self):
         dat = self.data.loc[::,['labels_buy','labels_hold','labels_sell']]
         return dat.to_numpy()
+
+    def append_all(self,spec=[]):
+        """Append all indicators found in talib, used for feature selection
+        spec - a list of specific talib functions as returned by InputTrials.(selection_function) to be used to create a new dataset
+        """
+        inputs = {
+            'open' : self.data['open'].astype(float).to_numpy(),
+            'high' : self.data['high'].astype(float).to_numpy(),
+            'low' : self.data['low'].astype(float).to_numpy(),
+            'close':self.data['close'].astype(float).to_numpy(),
+            'volume:':self.data['volume'].astype(float).to_numpy()
+                }
+        indicators = [talib.get_function_groups()[i] for i in [i for i in talib.get_function_groups().keys() if i in ('Volume Indicators','Momentum Indicators',)]]
+        indicators = [cell for row in indicators for cell in row]
+        #Extra arguments for each, simply used the recommended from the docs of ta lib
+        params= {'ADX':[14,1], 'ADXR':[14], 'APO':[12,26,0], 'AROON':[14],'AROONOSC':[14],'BOP':[], 'CCI':[14], 'CMO':[14], 'DX':[14], 'MACD':[12,26,9], 'MACDEXT':[12,0,26,0,9,0],'MACDFIX':[9],'MFI':[14],'MINUS_DI':[14],'MINUS_DM':[14],'MOM':[10], 'PLUS_DI':[12,26,0],'PLUS_DM':[14],'PPO':[12,26,0],'ROCP':[10], 'ROC':[10], 'ROCR':[10], 'ROCR100':[10],'RSI':[14],'STOCH':[5,3,0,3,0],'STOCHF':[5,3,0],'STOCHRSI':[14,5,3,0],'TRIX':[30],'ULTOSC':[7,14,28],'WILLR':[14],'AD':[],'ADOSC':[3,10],'OBV':[],'ART':[14],'NATR':[14],'TRANGE':[],'HT_DCPERIOD':[],'HT_DCPHASE':[],'HT_PHASOR':[],'HT_SINE':[],'HT_TRENDMODE':[]}
+        count = 0
+        if len(spec)>0: test=True
+        else: test = False
+        for indicator in indicators:
+            try:
+                if test and indicator in spec:
+                    self.data[indicator]=getattr(ta, indicator)(inputs, *params[indicator])
+                #Have to exclude some #TODO: Fix the 11/33 which dont work
+                elif not test:
+                    self.data[indicator]=getattr(ta, indicator)(inputs, *params[indicator])
+            except Exception as e:
+                print('Could not use {} due to {}'.format(indicator,e))
+                #print(e)
+                #print(indicator)
+                #print(*params[indicator])
+                #print(type(params[indicator]))
+                #try:
+                #    print(*[type(i) for i in params[indicator]])
+                #except:
+                #    pass
+                #print([len(inputs[i]) for i in inputs.keys()])
+                count+=1
+                print(count)
+                pass
 
     def oversample(self,split=0.2,random_state=12):
         """Randomly Oversample minority class
@@ -666,7 +720,11 @@ class ModDataset:
         b = [1,0,0]
         h = [0,1,0]
         s = [0,0,1]
-        data = self.data.dropna().iloc[::,6:].to_numpy(dtype='float')
+        try:
+            data = self.data.dropna().iloc[::,6:].to_numpy(dtype='float')
+        except:
+            print('Assuming data is in correct order as it does not have headers')
+            data = self.data
         #Change to last 1/5 is val rest train
         x_data = data[::,:-3:] #from index 6 as Date	open	high	low	close	volume comes first
         y_data = [np.sum(i*[0,1,2]) for i in data[::,-3::].astype('int')]
@@ -780,22 +838,22 @@ class ModDataset:
         return param.x
 
     def get_optimizer_diff(self,data,offset=0,prominence=0.5,rel_height=2, distance=None):
-            """Packaging function to remove extra calls
-            """
-            index_max = find_peaks(data,prominence=prominence,rel_height=rel_height,distance=distance)
-            index_min = find_peaks(data*-1,prominence=prominence,rel_height=rel_height,distance=distance)
-            labels = np.zeros(len(data))
-            labels[index_min[0]]=-1
-            labels[index_max[0]]=1
-            labels = labels[offset:]
-            delta = 0
-            data = data[offset:]
-            for i in range(len(labels)):
-                if labels[i] == -1:
-                    delta -= data[i]
-                elif labels[i] == 1:
-                    delta += data[i]
-            if delta != 0:
-                return delta
-            else:
-                return 0.01 #Avoids error, not very scientific but good enough
+        """Packaging function to remove extra calls
+        """
+        index_max = find_peaks(data,prominence=prominence,rel_height=rel_height,distance=distance)
+        index_min = find_peaks(data*-1,prominence=prominence,rel_height=rel_height,distance=distance)
+        labels = np.zeros(len(data))
+        labels[index_min[0]]=-1
+        labels[index_max[0]]=1
+        labels = labels[offset:]
+        delta = 0
+        data = data[offset:]
+        for i in range(len(labels)):
+            if labels[i] == -1:
+                delta -= data[i]
+            elif labels[i] == 1:
+                delta += data[i]
+        if delta != 0:
+            return delta
+        else:
+            return 0.01 #Avoids error, not very scientific but good enough

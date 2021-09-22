@@ -20,8 +20,8 @@ if not os.path.isdir('/home/felix/MLP_stockdata'):
 #Prep all data for MLP
 prep_all_data('/home/felix/stockdata', '/home/felix/MLP_stockdata')
 #Oversample all data'''
-dataset = ModDataset(dataset_path='/home/felix/MLP_stockdata', preped=True)
-print('Oversampling data')
+dataset = ModDataset(dataset_path='/home/felix/MLP_stockdata/MLP_feature_select_dat.csv', preped=False)
+#print('Oversampling data')
 '''x_train, x_test, y_train, y_test = dataset.oversample()
 #TODO: Fix SMOTENC returning killed - RAM issue
 for key,i  in zip(('x_train_under', 'x_test_under', 'y_train_under', 'y_test_under'),(x_train, x_test, y_train, y_test)):
