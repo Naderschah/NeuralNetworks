@@ -6,34 +6,29 @@ from tensorflow.keras.losses import MeanAbsolutePercentageError, MeanSquaredErro
 from tensorflow.keras.losses import LossFunctionWrapper
 import tensorflow.keras.backend as backend
 from keras_tuner import HyperParameters
+from tensorflow.python.keras.layers.normalization import LayerNormalization
 
 
 
 def CNN_Conv1D_LSTM(hp):
     '''After hyperparameter optimization and seperate training using parameters and EarlyStopping results in 3-5% MAPE and 3-5% std'''
         
-    model = Sequential(
+    model = Sequential( #Total possible combinations 
                 [   #input_shape=(5,5)
-                    Dense(units=hp.Int("dense1",min_value=32, max_value=512, step=32),use_bias=hp.Boolean('Bias1')), 
-                    LeakyReLU(alpha=hp.Float("alpha1",min_value=0, max_value=1, step=0.11)),
-                    Conv1D(filters=hp.Choice('conv1',values=[80,24]), kernel_size=1, use_bias=hp.Boolean('Bias2')),
-                    LeakyReLU(alpha=hp.Float("alpha2",min_value=0, max_value=1, step=0.11)),
-                    MaxPooling1D(pool_size=2,padding='same',data_format='channels_first'),
-                    Conv1D(filters=48, kernel_size=1, use_bias=False),
-                    LeakyReLU(alpha=hp.Float("alpha3",min_value=0, max_value=1, step=0.11)),
-                    MaxPooling1D(pool_size=2,padding='same',data_format='channels_first'),
-                    LeakyReLU(alpha=hp.Float("alpha4",min_value=0, max_value=1, step=0.11)),
-                    LSTM(units=hp.Choice('LSTM 1', values=[32,40]),dropout=hp.Float("lstm dropout 1",min_value=0, max_value=1, step=0.11), return_sequences=True,use_bias=hp.Boolean('Bias3'),unit_forget_bias=False),
-                    TimeDistributed(Dense(units=hp.Int('dense2', min_value=16,max_value=256,step=32))),
-                    LSTM(units=hp.Choice('LSTM 2', values=[16,32]),dropout=hp.Float("lstm dropout 2",min_value=0, max_value=1, step=0.11), use_bias=hp.Boolean('Bias4'),unit_forget_bias=False),
-                    Dense(units=hp.Int("dense3",min_value=32, max_value=512, step=32)), 
-                    LeakyReLU(alpha=hp.Float("alpha5",min_value=0, max_value=1, step=0.11)),
-                    Dense(units=1)
+                    Dense(units=hp.Int("dense1",min_value=96, max_value=160, step=32),use_bias=hp.Boolean('Bias1')), 
+                    Conv1D(filters=hp.Choice('conv1',values=[80,24]), kernel_size=1,padding='same', activation='relu', kernel_initializer="glorot_uniform"),
+                    MaxPooling1D(pool_size=2,padding='same'),
+                    Conv1D(filters=48, kernel_size = 1,padding='same', activation='relu', kernel_initializer="glorot_uniform"),
+                    MaxPooling1D(pool_size=2,padding='valid',data_format='channels_first'),
+                    LSTM(units=hp.Choice('LSTM 1', values=[32,40]),dropout=0.1, return_sequences=True,use_bias=False,unit_forget_bias=False),
+                    LSTM(units=hp.Choice('LSTM 2', values=[16,32]),dropout=0.1, use_bias=hp.Boolean('Bias2'),unit_forget_bias=False),
+                    Dense(units=hp.Int("dense3",min_value=16, max_value=64, step=16), activation="relu", kernel_initializer="uniform"), 
+                    Dense(units=1,activation="relu", kernel_initializer="uniform")
                 ]
             )
     
     model.compile(optimizer=Adam(learning_rate=hp.Choice('learning rate',values=[0.5,1e-3,1e-4,1e-2,1e-1,1e-5])),
-                    loss=SymmetricMeanAbsolutePercentageError(),
+                    loss=AsymmetricSquaredError(), #See if this yields any good results
                     metrics=['MAPE', 'MSE'])
     
     return model
@@ -69,22 +64,23 @@ def MP_CNN_Bi_Dir_LSTM(hp):
 
     Novel Deep Learning Model with CNN and Bi-Directional 
     LSTM for Improved Stock Market Index Prediction - 2019
+    DOI: 10.1109/CCWC.2019.8666592
     -------
 
     input 50 closing prices
-    returns closing price prediction for 7 days into the future
+    returns closing price prediction for 7 days from the last data point
     """
-    input1 = Input((50,1))
-    normalized = BatchNormalization(axis=-1)(input1)
-    model_1 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(normalized)
-    model_2 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(normalized)
-    model_3 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(normalized)
+    input1 = Input((None,50,1))
+    #normalized = LayerNormalization(axis=-1)(input1)
+    model_1 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(input1)
+    model_2 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(input1)
+    model_3 = MP_CNN_Bi_Dir_LSTM_submodel(hp)(input1)
     model_concat = concatenate([model_1,model_2,model_3], axis = -1)
     model_concat = Dense(1, activation='linear')(model_concat)
     model = Model(inputs=[input1],outputs=model_concat)
     #TODO: Try also using Adadelta optimizer, allthough Adam most likely will perform better
     model.compile(optimizer=Adadelta(learning_rate=hp.Choice('learning rate',values=[0.15,0.1,1e-2]),rho=hp.Float('rho',0.05,0.35,step=0.05), epsilon=hp.Choice('epsilon',values=[1e-3,1e-4,1e-5])),
-                            loss=SymmetricMeanAbsolutePercentageError(),
+                            loss=MeanSquaredError(),#SymmetricMeanAbsolutePercentageError(),
                             metrics=['MAPE'])
     return model
 
@@ -93,17 +89,19 @@ def MP_CNN_Bi_Dir_LSTM_submodel(hp):
     Definition for the three submodels
     """
     Model = Sequential()
-    Model.add(Input(shape=(50,1)))
-    Model.add(Conv1D(filters=128, kernel_size=hp.Choice('kernel 1',values=[9]))) #TODO: Make a conditional thing, if two kernels are 9 the third has to be 5
-    Model.add(LeakyReLU(alpha=hp.Float("alpha1",min_value=0, max_value=1, step=0.11)))
-    Model.add(MaxPooling1D(pool_size=2))
-    Model.add(Conv1D(filters=128, kernel_size=hp.Choice('kernel 2',values=[9])))
-    Model.add(LeakyReLU(alpha=hp.Float("alpha2",min_value=0, max_value=1, step=0.11)))
-    Model.add(MaxPooling1D(pool_size=2))
-    Model.add(Conv1D(filters=128, kernel_size=hp.Choice('kernel 3',values=[5])))
-    Model.add(LeakyReLU(alpha=hp.Float("alpha3",min_value=0, max_value=1, step=0.11)))
-    Model.add(MaxPooling1D(pool_size=2))
-    Model.add(Bidirectional(LSTM(units=200)))
+    Model.add(Input(shape=(None,50,1)))
+    Model.add(TimeDistributed(Conv1D(filters=128, input_shape= (None,50,1),activation='relu',kernel_size=(9)))) #TODO: Make a conditional thing, if two kernels are 9 the third has to be 5
+    Model.add(TimeDistributed(MaxPooling1D(pool_size=2)))
+    Model.add(TimeDistributed(Conv1D(filters=128, kernel_size=hp.Choice('kernel 2',values=[9]))))
+    Model.add(TimeDistributed(LeakyReLU(alpha=hp.Float("alpha2",min_value=0, max_value=1, step=0.11))))
+    Model.add(TimeDistributed(MaxPooling1D(pool_size=2)))
+    Model.add(TimeDistributed(Conv1D(filters=128, kernel_size=hp.Choice('kernel 3',values=[5]))))
+    Model.add(TimeDistributed(LeakyReLU(alpha=hp.Float("alpha3",min_value=0, max_value=1, step=0.11))))
+    Model.add(TimeDistributed(MaxPooling1D(pool_size=2)))
+    Model.add(TimeDistributed(Flatten()))
+    Model.add(Bidirectional(LSTM(200,return_sequences=True)))
+    Model.add(Dropout(0.25))
+    Model.add(Bidirectional(LSTM(units=200,return_sequences=False)))
     Model.add(Dropout(rate=0.5))
     Model.add(Dense(units=1,activation='linear'))
     return Model
@@ -134,7 +132,30 @@ def MultiLayerPerceptron(hp):
     return model
 
 
-
+def MLP_CNN_Conv1D_LSTM(hp):
+    '''
+    Combination of MLP and CNN_Conv1D_LSTM
+    '''
+    #TODO:
+    model = Sequential( #Total possible combinations 
+                [   #input_shape=(5,5)
+                    Dense(units=hp.Int("dense1",min_value=96, max_value=160, step=32),use_bias=hp.Boolean('Bias1')), 
+                    Conv1D(filters=hp.Choice('conv1',values=[80,24]), kernel_size= 1,padding='same', activation='relu', kernel_initializer="glorot_uniform"),
+                    MaxPooling1D(pool_size=2,padding='same'),
+                    Conv1D(filters=48, kernel_size = 1,padding='same', activation='relu', kernel_initializer="glorot_uniform"),
+                    MaxPooling1D(pool_size=2,padding='valid',data_format='channels_first'),
+                    LSTM(units=hp.Choice('LSTM 1', values=[32,40]),dropout=0.1, return_sequences=True,use_bias=False,unit_forget_bias=False),
+                    LSTM(units=hp.Choice('LSTM 2', values=[16,32]),dropout=0.1, use_bias=hp.Boolean('Bias2'),unit_forget_bias=False),
+                    Dense(units=hp.Int("dense3",min_value=16, max_value=64, step=16), activation="relu", kernel_initializer="uniform"), 
+                    Dense(units=1,activation="relu", kernel_initializer="uniform")
+                ]
+            )
+    
+    model.compile(optimizer=Adam(learning_rate=hp.Choice('learning rate',values=[0.5,1e-3,1e-4,1e-2,1e-1,1e-5])),
+                    loss=MeanSquaredError(),
+                    metrics=['MAPE', 'MSE','mae'])
+    
+    return model
 
 
 
@@ -184,7 +205,17 @@ class SymmetricMeanAbsolutePercentageError(LossFunctionWrapper):
 
 
 
+def asym_square_loss(y_true,y_pred):
+    """Custom smape loss overpenalizing negative loss"""
+    l = lambda a: ((a)**2)*(np.sign(a)-.5)**2
+    error=l(y_pred-y_true)
+    return error
 
-
-
+class AsymmetricSquaredError(LossFunctionWrapper):
+    """
+    Wrapper for sMAPE loss function, allows to use in hyperparameter tuning
+    """
+    def __init__(self, name='asymmetric_aquare_error'):
+        super(AsymmetricSquaredError, self).__init__(
+            asym_square_loss, name=name)
 

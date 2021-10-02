@@ -15,7 +15,7 @@ for device in physical_devices:
 import numpy as np
 from keras_tuner import Hyperband, HyperParameters
 from OptimizeNN_keras import CNN_Conv1D_LSTM
-from Raw_Data import ModDataset
+from Raw_Data import ModDataset, format_data
 import os
 
 
@@ -29,11 +29,13 @@ import os
 
 # Get random data file from SP500 stocks
 for root, dirs, files in os.walk('/home/felix/stockdata'):
-    file = files[np.randint(0,len(files))]
+    file = files[np.random.randint(0,len(files))]
+
 data = ModDataset(dataset_path='/home/felix/stockdata/{}'.format(file))
 
-x_train, x_test, y_train, y_test = data.oversample()
-
+data = data.data.to_numpy()
+#Create datasets of 5 input days of 5 quantifiers, and 1 output day with 1 closing price
+x_data, x_days, y_data, y_days = format_data(data,input_length=5,input_quantfiers=['open','high','low','close','volume'],output_length=1,output_quantifiers=['close'],offset=0)
 
 print('Creating model tuner')
 tuner = Hyperband(
@@ -42,12 +44,15 @@ tuner = Hyperband(
     objective="MAPE", 
     factor=5,
     hyperband_iterations=2, #In my interest to set as high as possible, max_epochs * (math.log(max_epochs, factor) ** 2)  one iteration runs prior nr of epochs across trials
-    directory='CNN_ConvLSTM_{}'.format(file.split('_')[1].split('.')[0]),
+    directory='CNN_ConvLSTM/{}'.format(file.split('_')[1].split('.')[0]),
     project_name= 'hyper_for_generalization'
 )
-
+x_data = np.array(x_data)
+x_days = np.array(x_days)
+y_data = np.array(y_data)
+y_days = np.array(y_days)
 print('Starting search')
-tuner.search(x_train,y_train,validation_data=(x_test,y_test),shuffle=True,batch_size=128)
+tuner.search(x_data,y_data,validation_split=0.3,shuffle=False,batch_size=128)
 print('best parameters: \n',tuner.get_best_hyperparameters()[0].get_config()['values'])
 
 #Fix Hyperparameters
@@ -66,14 +71,16 @@ print('Starting training loop')
 for root, dirs, files in os.walk('/home/felix/stockdata'):
     for i in files:
         print(i.split('_')[1].split('.')[0])
-        del data, x_train, x_test, y_train, y_test
+        del data, x_data, x_days, y_data, y_days
         #Getting data
         data = ModDataset(dataset_path='/home/felix/stockdata/{}'.format(file))
-        x_train, x_test, y_train, y_test = data.oversample()
+        data = data.data.to_numpy()
+        #Create datasets of 5 input days of 5 quantifiers, and 1 output day with 1 closing price
+        x_data, x_days, y_data, y_days = format_data(data,input_length=5,input_quantfiers=['open','high','low','close','volume'],output_length=1,output_quantifiers=['close'],offset=0)
         #Preparing the model
         model = CNN_Conv1D_LSTM(hp)
         #training
-        model.fit(x=x_train, y=y_train, batch_size=128, validation_data=(x_test,y_test))
+        model.fit(x_data,y_data,validation_split=0.3,shuffle=False, batch_size=128)
         #Saving
         model.save(os.path.join('/home/felix/CNN_ConvLSTM', i.split('_')[1].split('.')[0]))
         del model

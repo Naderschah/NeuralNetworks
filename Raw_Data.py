@@ -18,6 +18,7 @@ from tensorflow.python.keras.utils.generic_utils import to_snake_case
 from scipy.sparse import coo_matrix
 from itertools import compress
 import time
+from numba import jit 
 import yfinance as yf
 import sys
 
@@ -178,90 +179,18 @@ def get_data_yf(stock):
         return np.array(list(spamreader),dtype=object)
     
 
-
-def format_data(data, input_length, input_quantfiers, output_length,offset, output_quantifiers, sliding_window = False, scaling_func = None):
-    """
-    Function to generalize data formating for future usage, always groups into sequence of sequence (i.e. (None, 5,5); (None, 1,1) --> 5 days of 5 quantifiers in and 1 day of one quantifier out)
-    ----------
-    data --> np.array ---> raw data as returned by AV_data or get_data (preference on get_data as it doesnt use as many API calls)
-    input_length --> length of input sequence (i.e. days) in terms of shape (none, x,y) would be x
-    input_quantifiers --> list of str: quantifiers to use i.e. ['close', 'open',...]
-    output_length --> length of output sequence (i.e. days) see above
-    offset --> offset between input and output sequence in days
-    output_quantifiers --> list of str: quantifiers to use i.e. ['close', 'open',...]
-    sliding_window --> wheter to use sliding window approach or not #FIXME: implement
-    scaling_func ---> callable scaling function can also be list of callables in order in which they are to be applied
-    -------------
-    always returns: x_data, x_days, y_data, y_days, args
-    Where args is a dict object containing the output of scaling_func etc.
-    """
-    #Set dtype to correctly format array for further use
-    data = np.array([data.transpose()[0].astype('U10'), *data.transpose()[1::].astype('float64')],dtype=object).transpose()
-    quantifier_keys = {'open':1, 'high':2, 'low':3, 'close':4, 'volume':5} 
-    if 'offset' not in locals():
-        offset = 0
-    input_indeces = [0]
+def format_data(data, input_length, input_quantfiers, output_length,offset, output_quantifiers, sliding_window = False, extra_quantifiers = []):
+    """Formats data, pay attention that weekdays are skipped indices so an offset of 7 days is an offset of 5
+    *_quantifiers - quantifiers to be output in formatted array, if these do not belong to OHLCV (which are expected to be on indices 1-5 with date on 0) they need to be specified in order under extra_quantifiers 
     
-    args = {}
-    #   Get keys of quantifiers to include for in and out
-    for i in input_quantfiers:
-        for j in quantifier_keys:
-            if i == j:
-                input_indeces.append(quantifier_keys[i]) 
-                break
+    """
 
-    output_indeces = [0]
-
-    for j in output_quantifiers:
-        for i in quantifier_keys:
-            if i == j:
-                output_indeces.append(quantifier_keys[i])
-                break
-
-    #   Apply scaling
-    if scaling_func!=None:
-        args['order'] = [] #Contains order of scaling operation 
-        if type(scaling_func) == list:
-            for func in scaling_func:
-                data, args = func(data) 
-        else:
-            data, args = scaling_func(data, args)
-
-    #   Get relevant data
-    data = data[-100::].transpose()
-    #FIXME: Sort input indeces! Check if np array assignment worked otherwise use np.delete
-    x_data = np.array([data[i] for i in input_indeces]).transpose()
-    y_data = np.array([data[i] for i in output_indeces]).transpose()
-    if not sliding_window:
-        nr_of_sets = len(x_data)//(input_length+output_length) 
-        if offset > 0: #TODO: CHange the way I accounted for offset
-            nr_of_sets-=1
-        #Below removes from front rather than end
-        x_data = x_data[len(x_data)-(input_length+output_length)*nr_of_sets::]
-        y_data = y_data[len(y_data)-(input_length+output_length)*nr_of_sets::]
-        if output_length == 1:
-            y_days = y_data[input_length-1::input_length+output_length+offset,0]
-            y_data = y_data[input_length-1::input_length+output_length+offset,1::] #TODO: Check this works
-        else:
-            raise Exception('longer than 1 output length not implemented yet!')
-            #Could reshape array using numpy and select only relevant indeces
-            #Work this out on paper
-
-        x_days = np.delete(x_data, np.linspace(1,len(x_data),len(x_data),dtype=int)[input_length-1::input_length+output_length],axis=0)[::,0]
-        x_data = np.delete(x_data, np.linspace(1,len(x_data),len(x_data),dtype=int)[input_length-1::input_length+output_length],axis=0)[::,1::]
-        x_data = np.reshape(x_data, (nr_of_sets, input_length, x_data.shape[-1])) #TODO: Check this actualy works
-
-
-    return x_data, x_days, y_data, y_days, args
-
-    #else: #TODO: Sliding window
-    #    raise Exception('Sliding window not implemented yet!')
-
-    
-
-def format_data_2(data, input_length, input_quantfiers, output_length,offset, output_quantifiers, sliding_window = False):
     data = np.array([data.transpose()[0].astype('U10'), *data.transpose()[1::].astype('float64')],dtype=object).transpose()
-    quantifier_keys = {'open':1, 'high':2, 'low':3, 'close':4, 'volume':5} 
+    quantifier_keys = {'open':1, 'high':2, 'low':3, 'close':4, 'volume':5}
+    #Append extras to keys
+    if len(extra_quantifiers) > 0:
+        for i in range(len(extra_quantifiers)):
+            quantifier_keys[extra_quantifiers[i]] = 6+i
     if 'offset' not in locals():
         offset = 0
     indeces = {}
@@ -269,44 +198,69 @@ def format_data_2(data, input_length, input_quantfiers, output_length,offset, ou
 
     input_indeces = []
 
+    #Tracker of indices for the end of the function
+    counter = 0
     #   Get keys of quantifiers to include for in and out
     for i in input_quantfiers:
         for j in quantifier_keys:
             if i == j:
-                indeces[quantifier_keys[i]]=1 
+                indeces[quantifier_keys[i]]=counter
+                counter += 1
                 input_indeces.append(quantifier_keys[i]) 
                 break
 
     output_indeces = []
-
+    counter = 0
     for j in output_quantifiers:
         for i in quantifier_keys:
             if i == j:
-                indeces[quantifier_keys[i]] = 1
+                if quantifier_keys[i] in input_indeces: 
+                    print(quantifier_keys[i], indeces)
+                    #in case this variable was assigned to the input, use the inputs counter value for indexing
+                    pass
+                else: 
+                    indeces[quantifier_keys[i]] = counter
+                    counter += 1
                 output_indeces.append(quantifier_keys[i])
                 break
-    #Select only relevant indecies
+
+    #Select only relevant indecies, this step will be repeated for x and y specifically
     data = data.transpose()
     dates = data[0]
     data = np.array([data[key] for key in indeces]).transpose()
-    #Number of sets if no data is sourced twice
-    nr_of_sets = len(data)//(offset+input_length+output_length)
-    #Change length of array
-    data = data[len(data)-nr_of_sets*(offset+input_length+output_length)::]
-    dates = dates[len(dates)-nr_of_sets*(offset+input_length+output_length)::]
-    #Reshape array
-    data = np.reshape(data,(nr_of_sets, offset+input_length+output_length, data.shape[-1]))
-    dates = np.reshape(dates,(nr_of_sets, offset+input_length+output_length, data.shape[-1]))
-    if output_length == 1:
-        y_data = np.array([data[i][-1] for i in range(len(data))],dtype=np.float64)
-        y_days = np.array([dates[i][-1] for i in range(len(data))],dtype=object)
 
+    if not sliding_window:
+        #Number of sets if no data is sourced twice
+        nr_of_sets = len(data)//(offset+input_length+output_length)
+
+        #Change length of array
+        length=len(data)
+        data = data[length-nr_of_sets*(offset+input_length+output_length)::]
+        dates = dates[length-nr_of_sets*(offset+input_length+output_length)::]
+        #Reshape array
+        shape = data.shape[-1]
+
+        data = np.reshape(data,(nr_of_sets, offset+input_length+output_length, shape))
+        dates = np.reshape(dates,(nr_of_sets, offset+input_length+output_length))
     else:
-        y_data = np.array([data[i][-output_length:] for i in range(len(data))],dtype=np.float64)
-        y_days = np.array([dates[i][-output_length:] for i in range(len(data))],dtype=object)
+        result1 = []
+        result2 = []
+        sequence_length = input_length+output_length+offset
 
-    x_data = np.array([data[i][:-output_length-offset] for i in range(len(data))],dtype=np.float64)
-    x_days = np.array([dates[i][:-output_length-offset] for i in range(len(data))],dtype=object)
+        for index in range(0,len(data) - sequence_length):
+            result1.append(data[index: index+sequence_length])
+            result2.append(dates[index: index+sequence_length])
+        data = np.array(result1)
+        dates = np.array(result2)
+
+    
+    y_data = np.array([[[data[i][-k-1][indeces[j]] for j in indeces if j in output_indeces] for k in range(output_length)] for i in range(len(data))],dtype=np.float64)
+    y_days = np.array([ dates[i][-output_length:] for i in range(len(data))], dtype=object)
+    
+
+    x_data = np.array([[[data[i][k][indeces[j]] for j in indeces if j in input_indeces] for k in range(len(data[i][:-output_length-offset]))] for i in range(len(data))],dtype=np.float64)
+    x_days = np.array([ dates[i][:input_length] for i in range(len(data))], dtype=object)
+
 
     return x_data, x_days, y_data, y_days
 
@@ -336,9 +290,8 @@ def normalize(array, constants=None): #FIXME: what about the categorical will no
     returns normalized array and coefficients, these will be needed to pass new data!"""
     if type(array) == list:
         array = np.array(array)
-    print(array.shape)
     array = array.transpose()
-    print(array.shape)
+
     if constants == None:
         print('Creating normalization')
         norm = []
@@ -352,7 +305,8 @@ def normalize(array, constants=None): #FIXME: what about the categorical will no
         print('Using old normalization')
         for i in range(len(array)):
             array[i] = (array[i]-constants[i][0])/(constants[i][1]-constants[i][0])
-        return array.transpose()
+        array = array.transpose()
+        return array
 
 
 
@@ -645,6 +599,7 @@ class ModDataset:
         dat = self.data.loc[::,['labels_buy','labels_hold','labels_sell']]
         return dat.to_numpy()
 
+    @jit #TODO: See if this changes anything
     def append_all(self,spec=[]):
         """Append all indicators found in talib, used for feature selection
         spec - a list of specific talib functions as returned by InputTrials.(selection_function) to be used to create a new dataset
